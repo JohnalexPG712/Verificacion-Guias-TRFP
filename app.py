@@ -283,4 +283,5 @@ if st.session_state.df_resultado is not None:
         data=excel_file,
         file_name="Resultado_Verificación_Guias.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )```
+    )
+
