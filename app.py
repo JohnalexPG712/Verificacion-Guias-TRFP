@@ -174,22 +174,28 @@ st.set_page_config(layout="wide", page_title="Conciliador de Guías")
 st.title("🚀 Herramienta de Conciliación de Guías y Formularios")
 st.markdown("Carga los archivos PDF de guías y los archivos CSV de formularios para compararlos.")
 
+# --- Inicialización del estado de la sesión ---
 if 'df_resultado' not in st.session_state:
     st.session_state.df_resultado = None
+# AJUSTE: Añadir una llave única para el file_uploader para poder reiniciarlo
+if 'file_uploader_key' not in st.session_state:
+    st.session_state.file_uploader_key = 0
 
 uploaded_files = st.file_uploader(
     "Selecciona los archivos PDF y CSV",
     type=['pdf', 'csv'],
-    accept_multiple_files=True
+    accept_multiple_files=True,
+    key=f"file_uploader_{st.session_state.file_uploader_key}" # Usamos la llave
 )
 
 # --- Botones de Acción ---
-col1, col2, _ = st.columns([1, 1, 3]) # Columnas para alinear los botones
+col1, col2, _ = st.columns([1, 1, 3])
 with col1:
     if st.button("📊 Conciliar Archivos", type="primary"):
         if not uploaded_files:
             st.warning("Por favor, carga al menos un archivo PDF y un archivo CSV.")
         else:
+            # Lógica de procesamiento... (sin cambios)
             files_pdf = [f for f in uploaded_files if f.name.lower().endswith('.pdf')]
             files_csv = [f for f in uploaded_files if f.name.lower().endswith('.csv')]
             if not files_pdf or not files_csv:
@@ -230,8 +236,9 @@ with col1:
 with col2:
     if st.session_state.df_resultado is not None:
         if st.button("🧹 Limpiar Resultados"):
+            # AJUSTE DEFINITIVO: Borramos los resultados Y reiniciamos el widget de carga
             st.session_state.df_resultado = None
-            # AJUSTE DEFINITIVO: Usar el comando moderno para refrescar la página
+            st.session_state.file_uploader_key += 1
             st.rerun()
 
 # --- Visualización de Resultados ---
@@ -276,4 +283,4 @@ if st.session_state.df_resultado is not None:
         data=excel_file,
         file_name="Resultado_Verificación_Guias.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
+    )```
