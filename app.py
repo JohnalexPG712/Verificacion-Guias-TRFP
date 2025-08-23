@@ -7,8 +7,7 @@ import streamlit as st
 import io
 
 # ==============================================================================
-# --- SECCIÓN 1: LÓGICA DE EXTRACCIÓN (El "motor" de nuestro script) ---
-# (Lógica intacta)
+# --- SECCIÓN 1: LÓGICA DE EXTRACCIÓN (Tu código, sin cambios) ---
 # ==============================================================================
 
 # --- Funciones para PDF ---
@@ -47,6 +46,27 @@ def pdf_extraer_facturas(texto_guia, operador, ref_no_maestro_dhl):
     if operador == "DHL" and ref_no_maestro_dhl:
         todas.add(ref_no_maestro_dhl)
     return ", ".join(sorted(list(todas))) if todas else ""
+def pdf_extraer_pn(texto_guia):
+    m = re.search(r"PN[:\s]*([\d.,]+)", texto_guia)
+    return m.group(1).replace(",", ".") if m else ""
+def pdf_extraer_fmm(texto_guia):
+    m = re.search(r"(FMM\d+)", texto_guia); return m.group(1) if m else ""
+def pdf_extraer_remitente(texto_guia):
+    m = re.search(r"(SOLIDEO\s*S\.?A?\.?S\.?)", texto_guia, re.IGNORECASE)
+    if m: return "SOLIDEO S.A.S."
+    return ""
+def pdf_extraer_fecha(texto_guia):
+    patron = r"(?i)(?:SHIP DATE:\s*|Date\s)(\d{2}[A-Z]{3}\d{2})|(\d{4}-\d{2}-\d{2})|Date\s*(\d{2}\s[A-Z]{3}\s\d{4})"
+    m = re.search(patron, texto_guia)
+    if not m: return ""
+    fecha_str = next((g for g in m.groups() if g is not None), None)
+    if not fecha_str: return ""
+    fecha_str_limpia = " ".join(fecha_str.split()).title()
+    formatos = [('%d%b%y', '%Y-%m-%d'), ('%Y-%m-%d', '%Y-%m-%d'), ('%d %b %Y', '%Y-%m-%d')]
+    for fmt_in, fmt_out in formatos:
+        try: return datetime.strptime(fecha_str_limpia, fmt_in).strftime(fmt_out)
+        except ValueError: continue
+    return fecha_str
 @st.cache_data
 def procesar_archivos_pdf(lista_archivos_pdf):
     datos_pdf = []
@@ -56,10 +76,10 @@ def procesar_archivos_pdf(lista_archivos_pdf):
                 texto_completo = "\n".join(page.extract_text(x_tolerance=1) or "" for page in pdf.pages)
             patrones_inicio = [r"ORIGIN ID:", r"EXPRESS WORLDWIDE", r"UPS WORLDWIDE SERVICE"]
             indices = [m.start() for m in re.finditer("|".join(patrones_inicio), texto_completo)]
+            bloques_guias = []
             if not indices:
                 bloques_guias = [texto_completo]
             else:
-                bloques_guias = []
                 for i in range(len(indices)):
                     inicio = indices[i]
                     fin = indices[i+1] if i + 1 < len(indices) else len(texto_completo)
@@ -74,12 +94,15 @@ def procesar_archivos_pdf(lista_archivos_pdf):
                 if tracking:
                     datos_pdf.append({
                         "Tracking": tracking,
-                        "País destino guía pdf": pdf_extraer_pais_destino(bloque),
-                        "Facturas comercial guía pdf": pdf_extraer_facturas(bloque, operador, ultimo_ref_dhl),
-                        "Archivo guía pdf": archivo.name
+                        "Fecha_GUÍA": pdf_extraer_fecha(bloque),
+                        "Pais_Destino_GUÍA": pdf_extraer_pais_destino(bloque),
+                        "FMM_GUÍA": pdf_extraer_fmm(bloque),
+                        "Peso_Neto_GUÍA": pdf_extraer_pn(bloque),
+                        "Remitente_Usuario_GUÍA": pdf_extraer_remitente(bloque),
+                        "Facturas_GUÍA": pdf_extraer_facturas(bloque, operador, ultimo_ref_dhl)
                     })
         except Exception as e:
-            st.error(f"Error procesando el PDF '{archivo.name}': {e}")
+            st.error(f"Error procesando PDF '{archivo.name}': {e}")
     return pd.DataFrame(datos_pdf)
 
 # --- Funciones para CSV ---
@@ -91,8 +114,9 @@ def procesar_reporte_csv(lista_archivos_csv):
             contenido_completo = archivo.getvalue().decode('latin-1')
             lineas = contenido_completo.splitlines()
         except Exception as e:
-            st.error(f"Error leyendo el CSV '{archivo.name}': {e}")
+            st.error(f"Error leyendo CSV '{archivo.name}': {e}")
             continue
+            
         formulario, usuario, pais_destino = "", "", ""
         for linea in lineas:
             if not formulario and "FORMULARIO No. No." in linea:
@@ -119,6 +143,7 @@ def procesar_reporte_csv(lista_archivos_csv):
                 except IndexError: pass
             if formulario and usuario and pais_destino:
                 break
+                
         factura_a_asignar = ""
         en_anexos = False
         for linea in lineas:
@@ -128,105 +153,111 @@ def procesar_reporte_csv(lista_archivos_csv):
                 if 'servicio' not in linea.lower():
                     match_factura = re.search(r'\b(ZFFE\d+|ZFFV\d+)\b', linea_strip)
                     if match_factura: factura_a_asignar = match_factura.group(0)
+        
         en_anexos = False
         for linea in lineas:
             linea_strip = linea.strip()
             if "DETALLE DE LOS ANEXOS" in linea_strip: en_anexos = True
             if en_anexos and linea_strip.startswith('127,'):
                 guia = re.search(r'\b(8837\d{8})\b', linea_strip)
+                fecha = re.search(r'(\d{4}/\d{2}/\d{2})', linea_strip)
                 if guia:
                     todos_los_datos.append({
                         "Tracking": guia.group(0),
-                        "País Destino csv": pais_destino,
-                        "Factura Comercial csv": factura_a_asignar
+                        "Fecha_FMM": datetime.strptime(fecha.group(0), '%Y/%m/%d').strftime('%Y-%m-%d') if fecha else "",
+                        "Pais_Destino_FMM": pais_destino,
+                        "FMM_FMM": formulario,
+                        "Remitente_Usuario_FMM": usuario,
+                        "Facturas_FMM": factura_a_asignar
                     })
     return pd.DataFrame(todos_los_datos)
 
 # ==============================================================================
-# --- SECCIÓN 2: INTERFAZ DE STREAMLIT (Con corrección de estado) ---
+# --- SECCIÓN 2: INTERFAZ DE STREAMLIT ---
 # ==============================================================================
 
 st.set_page_config(layout="wide", page_title="Conciliador de Guías")
-st.title("🚀 Herramienta de Conciliación de Guías Aéreas")
-st.markdown("Esta aplicación procesa guías desde archivos **PDF** y las compara con los datos de un formulario **CSV** para identificar diferencias.")
+st.title("🚀 Herramienta de Conciliación de Guías y Formularios")
+st.markdown("Carga los archivos PDF de guías y los archivos CSV de formularios para compararlos.")
 
-# --- Inicialización del estado de la sesión ---
 if 'df_resultado' not in st.session_state:
     st.session_state.df_resultado = None
 
-# --- Carga de Archivos ---
-st.header("1. Carga tus archivos")
-st.info("Puedes arrastrar y soltar múltiples archivos PDF y CSV a la vez.")
 uploaded_files = st.file_uploader(
-    "Selecciona los archivos PDF de guías y los CSV de formularios",
+    "Selecciona los archivos PDF y CSV",
     type=['pdf', 'csv'],
     accept_multiple_files=True
 )
 
-# --- Botón de Procesamiento ---
 if st.button("📊 Conciliar Archivos", type="primary"):
     if not uploaded_files:
-        st.warning("Por favor, carga al menos un archivo PDF y un archivo CSV para continuar.")
+        st.warning("Por favor, carga al menos un archivo PDF y un archivo CSV.")
     else:
         files_pdf = [f for f in uploaded_files if f.name.lower().endswith('.pdf')]
         files_csv = [f for f in uploaded_files if f.name.lower().endswith('.csv')]
+
         if not files_pdf or not files_csv:
             st.error("Error: Debes cargar al menos un archivo PDF Y al menos un archivo CSV.")
         else:
-            with st.spinner("Procesando archivos y realizando la conciliación..."):
+            with st.spinner("Procesando y conciliando datos..."):
                 df_guias = procesar_archivos_pdf(files_pdf)
                 df_formulario = procesar_reporte_csv(files_csv)
+
                 if df_guias.empty or df_formulario.empty:
                     st.error("No se pudo extraer información de una de las fuentes. No es posible comparar.")
-                    st.session_state.df_resultado = None # Limpiamos el resultado si hay error
+                    st.session_state.df_resultado = None
                 else:
                     df_guias['Tracking'] = df_guias['Tracking'].astype(str)
                     df_formulario['Tracking'] = df_formulario['Tracking'].astype(str)
                     
-                    mapa_paises = {"US": "UNITED STATES OF AMERICA", "ESTADOS UNIDOS": "UNITED STATES OF AMERICA", "JP": "JAPAN"}
-                    df_guias['Pais_Normalizado'] = df_guias['País destino guía pdf'].str.upper().map(mapa_paises).fillna(df_guias['País destino guía pdf'].str.upper())
-                    df_formulario['Pais_Normalizado'] = df_formulario['País Destino csv'].str.upper().map(mapa_paises).fillna(df_formulario['País Destino csv'].str.upper())
-
                     df_conciliado = pd.merge(df_guias, df_formulario, on='Tracking', how='outer', indicator=True)
+                    
+                    mapa_paises = {"US": "UNITED STATES OF AMERICA", "ESTADOS UNIDOS": "UNITED STATES OF AMERICA", "JP": "JAPAN"}
+                    df_conciliado['Pais_Normalizado_GUÍA'] = df_conciliado['Pais_Destino_GUÍA'].str.upper().map(mapa_paises).fillna(df_conciliado['Pais_Destino_GUÍA'].str.upper())
+                    df_conciliado['Pais_Normalizado_FMM'] = df_conciliado['Pais_Destino_FMM'].str.upper().map(mapa_paises).fillna(df_conciliado['Pais_Destino_FMM'].str.upper())
+                    df_conciliado['FMM_Normalizado_GUÍA'] = df_conciliado['FMM_GUÍA'].str.replace('FMM', '', regex=False)
                     
                     def analizar_fila(row):
                         origen = row['_merge']
-                        if origen == 'left_only': return '❌ SOLO EN PDF'
-                        if origen == 'right_only': return '❌ SOLO EN CSV'
+                        if origen == 'left_only': return '❌ SOLO EN GUÍA'
+                        if origen == 'right_only': return '❌ SOLO EN FMM'
                         diferencias = []
-                        if str(row['Pais_Normalizado_x']) != str(row['Pais_Normalizado_y']): diferencias.append("País")
-                        if str(row['Facturas comercial guía pdf']) != str(row['Factura Comercial csv']): diferencias.append("Facturas")
+                        if str(row['Fecha_GUÍA']) != str(row['Fecha_FMM']): diferencias.append("Fecha")
+                        if str(row['Pais_Normalizado_GUÍA']) != str(row['Pais_Normalizado_FMM']): diferencias.append("País")
+                        if str(row['FMM_Normalizado_GUÍA']) != str(row['FMM_FMM']): diferencias.append("FMM")
+                        if str(row['Remitente_Usuario_GUÍA']) != str(row['Remitente_Usuario_FMM']): diferencias.append("Remitente")
+                        if str(row['Facturas_GUÍA']) != str(row['Facturas_FMM']): diferencias.append("Facturas")
                         if not diferencias: return '✅ OK'
                         return '❌ Diferencia en: ' + ", ".join(diferencias)
                     
                     df_conciliado['Estado_Conciliacion'] = df_conciliado.apply(analizar_fila, axis=1)
-                    # Guardamos el resultado en la memoria de la sesión
                     st.session_state.df_resultado = df_conciliado
 
-# --- Visualización de Resultados (se ejecuta si hay datos en la memoria) ---
 if st.session_state.df_resultado is not None:
     st.success("¡Conciliación completada!")
+    df_final = st.session_state.df_resultado.drop(columns=['_merge', 'Pais_Normalizado_GUÍA', 'Pais_Normalizado_FMM', 'FMM_Normalizado_GUÍA'], errors='ignore')
     
-    df_resultado_final = st.session_state.df_resultado
-    
-    st.header("2. Resumen Ejecutivo")
+    st.header("Resumen Ejecutivo")
+    conteo_estados = df_final['Estado_Conciliacion'].value_counts()
     col1, col2, col3, col4 = st.columns(4)
-    conteo_estados = df_resultado_final['Estado_Conciliacion'].value_counts()
     col1.metric("✅ Coincidencias OK", conteo_estados.get('✅ OK', 0))
     col2.metric("❌ Con Diferencias", sum(1 for estado in conteo_estados.index if estado.startswith('❌ Diferencia')))
-    col3.metric("❓ Solo en PDF", conteo_estados.get('❌ SOLO EN PDF', 0))
-    col4.metric("❓ Solo en CSV", conteo_estados.get('❌ SOLO EN CSV', 0))
+    col3.metric("❓ Solo en Guías (PDF)", conteo_estados.get('❌ SOLO EN GUÍA', 0))
+    col4.metric("❓ Solo en Formularios (CSV)", conteo_estados.get('❌ SOLO EN FMM', 0))
 
-    st.header("3. Reporte Detallado de Conciliación")
+    st.header("Reporte Detallado de Conciliación")
     columnas_ordenadas = [
         'Estado_Conciliacion', 'Tracking',
-        'País destino guía pdf', 'País Destino csv',
-        'Facturas comercial guía pdf', 'Factura Comercial csv',
-        'Archivo guía pdf'
+        'Fecha_GUÍA', 'Fecha_FMM',
+        'Pais_Destino_GUÍA', 'Pais_Destino_FMM',
+        'FMM_GUÍA', 'FMM_FMM',
+        'Peso_Neto_GUÍA',
+        'Remitente_Usuario_GUÍA', 'Remitente_Usuario_FMM',
+        'Facturas_GUÍA', 'Facturas_FMM',
     ]
-    columnas_existentes = [col for col in columnas_ordenadas if col in df_resultado_final.columns]
-    st.dataframe(df_resultado_final[columnas_existentes])
-
+    columnas_existentes = [col for col in columnas_ordenadas if col in df_final.columns]
+    st.dataframe(df_final[columnas_existentes])
+    
     @st.cache_data
     def convertir_df_a_excel(df):
         output = io.BytesIO()
@@ -234,11 +265,11 @@ if st.session_state.df_resultado is not None:
             df.to_excel(writer, index=False, sheet_name='Conciliacion')
         return output.getvalue()
 
-    excel_file = convertir_df_a_excel(df_resultado_final[columnas_existentes])
+    excel_file = convertir_df_a_excel(df_final[columnas_existentes])
     
     st.download_button(
         label="📥 Descargar Reporte en Excel",
         data=excel_file,
-        file_name="reporte_conciliacion.xlsx",
+        file_name="Resultado_Verificación_Guias.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
