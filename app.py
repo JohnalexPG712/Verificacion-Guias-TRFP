@@ -364,11 +364,18 @@ def main():
             else:
                 st.warning("⚠️ Debes cargar ambos tipos de archivos")
     
-    # Botón de limpieza - LIMPIA TODO
+     # Botón de limpieza - LIMPIA TODO INCLUYENDO ARCHIVOS CARGADOS
     if st.sidebar.button("🗑️ Limpiar Resultados", type="secondary"):
+        # Limpiar todo el estado
         st.session_state.resultados = None
         st.session_state.archivos_guias = None
         st.session_state.archivos_formularios = None
+        st.session_state.limpiar_uploaders = True
+        
+        # Mensaje de confirmación
+        st.sidebar.success("✅ Todos los datos han sido limpiados")
+        
+        # Forzar rerun para limpiar los file uploaders
         st.rerun()
     
     # Mostrar resultados
@@ -457,3 +464,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
