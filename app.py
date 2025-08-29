@@ -255,7 +255,7 @@ def procesar_formulario_pdf(archivo):
     
     return unique_data
 
-# --- INTERFAZ STREAMLIT MEJORADA ---
+# --- INTERFAZ STREAMLIT ---
 def main():
     st.title("📦 Sistema de Conciliación de Guías Aéreas")
     st.markdown("---")
@@ -298,7 +298,17 @@ def main():
                                 suffixes=('_Guia', '_FMM')
                             )
                             
-                            # Función de análisis REAL
+                            # --- MAPEO DE PAÍSES ---
+                            mapa_paises = {
+                                "US": "UNITED STATES OF AMERICA", 
+                                "ESTADOS UNIDOS": "UNITED STATES OF AMERICA", 
+                                "JP": "JAPAN"
+                            }
+                            
+                            df_conciliado['Pais_Normalizado_Guia'] = df_conciliado['Pais_Destino_Guia'].str.upper().map(mapa_paises).fillna(df_conciliado['Pais_Destino_Guia'].str.upper())
+                            df_conciliado['Pais_Normalizado_FMM'] = df_conciliado['Pais_Destino_FMM'].str.upper().map(mapa_paises).fillna(df_conciliado['Pais_Destino_FMM'].str.upper())
+                            
+                            # Función de análisis REAL con países normalizados
                             def analizar_fila(row):
                                 if row['_merge'] == 'left_only': 
                                     return '❌ SOLO EN GUÍA'
@@ -309,7 +319,7 @@ def main():
                                 diferencias = []
                                 if str(row.get('Fecha_Guia', '')) != str(row.get('Fecha_FMM', '')):
                                     diferencias.append("Fecha")
-                                if str(row.get('Pais_Destino_Guia', '')) != str(row.get('Pais_Destino_FMM', '')):
+                                if str(row.get('Pais_Normalizado_Guia', '')) != str(row.get('Pais_Normalizado_FMM', '')):
                                     diferencias.append("País")
                                 if str(row.get('FMM_Guia', '')) != str(row.get('FMM_Formulario', '')):
                                     diferencias.append("FMM")
@@ -322,6 +332,10 @@ def main():
                                     return f'⚠️ Diferencias: {", ".join(diferencias)}'
                             
                             df_conciliado['Estado_Conciliacion'] = df_conciliado.apply(analizar_fila, axis=1)
+                            
+                            # Reiniciar índice para que empiece en 1
+                            df_conciliado.reset_index(drop=True, inplace=True)
+                            df_conciliado.index = df_conciliado.index + 1
                             
                             st.session_state.resultados = df_conciliado
                             st.success("✅ Conciliación completada")
@@ -345,13 +359,22 @@ def main():
         
         # Filtrar columnas para mejor visualización
         columnas_a_mostrar = [
-            'Tracking', 'Fecha_Guia', 'Fecha_FMM', 'Pais_Destino_Guia', 
-            'Pais_Destino_FMM', 'Peso_Neto_Guia', 'FMM_Guia', 'FMM_Formulario',
+            'Tracking', 'Fecha_Guia', 'Fecha_FMM', 
+            'Pais_Normalizado_Guia', 'Pais_Normalizado_FMM',
+            'Peso_Neto_Guia', 'FMM_Guia', 'FMM_Formulario',
             'Facturas_Guia', 'Facturas_FMM', 'Estado_Conciliacion'
         ]
         
         columnas_existentes = [col for col in columnas_a_mostrar if col in st.session_state.resultados.columns]
         df_mostrar = st.session_state.resultados[columnas_existentes]
+        
+        # Renombrar columnas para mejor visualización
+        df_mostrar = df_mostrar.rename(columns={
+            'Pais_Normalizado_Guia': 'País_Guia',
+            'Pais_Normalizado_FMM': 'País_FMM',
+            'FMM_Guia': 'FMM_Guía',
+            'FMM_Formulario': 'FMM_Formulario'
+        })
         
         st.dataframe(df_mostrar, use_container_width=True)
         
@@ -366,8 +389,10 @@ def main():
             col3.metric("❌ Solo Guía", conteo_estados.get('❌ SOLO EN GUÍA', 0))
             col4.metric("❌ Solo FMM", conteo_estados.get('❌ SOLO EN FMM', 0))
             
-            if '⚠️ Diferencias:' in conteo_estados:
-                st.metric("⚠️ Con Diferencias", conteo_estados['⚠️ Diferencias:'])
+            # Mostrar diferencias si existen
+            diferencias = sum(1 for estado in conteo_estados.index if '⚠️ Diferencias:' in estado)
+            if diferencias > 0:
+                st.metric("⚠️ Con Diferencias", diferencias)
         
         # Botones de exportación
         st.subheader("💾 Exportar Resultados")
@@ -377,10 +402,23 @@ def main():
     # Información de uso
     with st.expander("ℹ️ Instrucciones de uso"):
         st.markdown("""
-        **⚠️ IMPORTANTE:** Esta versión incluye verificaciones reales de datos:
-        - Compara fechas, países, FMM y facturas
-        - Muestra diferencias reales, no solo el merge
-        - Elimina duplicados automáticamente
+        **📋 Cómo usar:**
+        1. **Cargar archivos**: Sube las guías PDF y formularios PDF
+        2. **Procesar**: Haz clic en 'Procesar Conciliación'
+        3. **Revisar resultados**: Los resultados se mostrarán en tabla
+        4. **Exportar**: Descarga en CSV o Excel
+        5. **Limpiar**: Usa 'Limpiar Resultados' para empezar de nuevo
+        
+        **🎯 Características:**
+        - ✅ Normalización de países (US = UNITED STATES OF AMERICA)
+        - ✅ Comparación real de fechas, FMM y facturas
+        - ✅ Índice comienza en 1
+        - ✅ Eliminación de duplicados automática
+        - ✅ Detección de diferencias específicas
+        
+        **📦 Formatos soportados:**
+        - Guías: FedEx, UPS, DHL
+        - Formularios: Formularios de movimiento de mercancías
         """)
 
 if __name__ == "__main__":
