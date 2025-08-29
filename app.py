@@ -305,7 +305,7 @@ def main():
                             todos_datos_formularios.extend(datos)
                         
                         df_formularios = pd.DataFrame(todos_datos_formularios)
-                        st.info(f"Formularios procesados: {len(df_formularios)}")
+                        st.info(f"Guías en formulario procesados: {len(df_formularios)}")
                         
                         if not df_guias.empty and not df_formularios.empty:
                             # Conciliación con verificación real de datos
@@ -463,14 +463,13 @@ def main():
         - ✅ Limpieza instantánea sin recargar página
         - ✅ Normalización de países (US = UNITED STATES OF AMERICA)
         - ✅ Comparación real de fechas, FMM y facturas
-        - ✅ Índice comienza en 1
-        - ✅ Eliminación de duplicados automática
         - ✅ Descarga en formato Excel
         
         **📦 Formatos soportados:**
         - Guías: FedEx, UPS, DHL
-        - Formularios: Formularios de movimiento de mercancías
+        - Formularios: Formularios de movimiento de mercancías en PDF.
         """)
 
 if __name__ == "__main__":
     main()
+
