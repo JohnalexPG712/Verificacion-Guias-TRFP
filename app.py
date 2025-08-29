@@ -4,7 +4,7 @@ import streamlit as st
 import pandas as pd
 import pdfplumber
 from datetime import datetime
-import shutil
+import tempfile
 
 # --- CONFIGURACIÓN INICIAL ---
 st.set_page_config(page_title="Sistema de Conciliación de Guías", page_icon="📦", layout="wide")
@@ -101,6 +101,7 @@ def procesar_archivos_guias_pdf(archivos):
         try:
             with pdfplumber.open(archivo) as pdf:
                 texto_completo = "\n".join(page.extract_text(x_tolerance=1) or "" for page in pdf.pages)
+            
             texto_normalizado = re.sub(r'\s+', ' ', texto_completo)
             operador = pdf_detectar_operador(texto_normalizado)
             
@@ -117,11 +118,10 @@ def procesar_archivos_guias_pdf(archivos):
                         "Facturas_Guia": pdf_extraer_facturas(texto_normalizado, operador, "")
                     })
             else:
-                # Para otros operadores
                 patrones_inicio = [r"ORIGIN ID:", r"EXPRESS WORLDWIDE", r"UPS WORLDWIDE SERVICE"]
-                texto_normalizado = re.sub(r'\s+', ' ', texto_completo)
                 indices = [m.start() for m in re.finditer("|".join(patrones_inicio), texto_normalizado)]
                 bloques_guias = []
+                
                 if not indices:
                     bloques_guias.append(texto_normalizado)
                 else:
@@ -150,7 +150,12 @@ def procesar_archivos_guias_pdf(archivos):
                         
         except Exception as e:
             st.error(f"Error procesando {archivo.name}: {e}")
-    return pd.DataFrame(datos_pdf)
+    
+    # Eliminar duplicados
+    df = pd.DataFrame(datos_pdf)
+    if not df.empty:
+        df = df.drop_duplicates(subset=['Tracking'], keep='first')
+    return df
 
 def procesar_formulario_pdf(archivo):
     try:
@@ -162,7 +167,7 @@ def procesar_formulario_pdf(archivo):
         return []
     
     # Extracción de datos básicos
-    fmm_formulario, usuario, pais_destino = "", "", ""
+    fmm_formulario, usuario, pais_destino, factura_a_asignar = "", "", "", ""
     
     for linea in lineas:
         if "FORMULARIO No. No." in linea:
@@ -176,14 +181,28 @@ def procesar_formulario_pdf(archivo):
     
     for i, linea in enumerate(lineas):
         if "22. País Destino:" in linea:
-            texto_busqueda = linea
-            for j in range(i, min(i+3, len(lineas))):
-                texto_busqueda += " " + lineas[j]
-            match = re.search(r'22\.\s*País Destino:.*?(\d+\s+[A-Z\s]+)', texto_busqueda)
+            match = re.search(r'22\.\s*País Destino:\s*(\d+\s+[A-Z\s]+)', linea)
             if match:
                 pais_destino = re.sub(r'^\d+\s*', '', match.group(1).strip()).strip()
     
-    # Búsqueda simplificada de guías en anexos
+    # Extraer facturas que NO mencionen servicio
+    en_anexos = False
+    facturas_validas = []
+    
+    for i, linea in enumerate(lineas):
+        if "DETALLE DE LOS ANEXOS" in linea:
+            en_anexos = True
+        
+        if en_anexos and "FACTURA COMERCIAL" in linea:
+            tiene_servicio = any('servicio' in lineas[j].lower() for j in range(max(0, i-2), min(len(lineas), i+3)))
+            if not tiene_servicio:
+                match = re.search(r'\b(ZFFE\d+|ZFFV\d+)\b', linea)
+                if match:
+                    facturas_validas.append(match.group(0))
+    
+    factura_a_asignar = ", ".join(facturas_validas) if facturas_validas else ""
+    
+    # Extraer guías de la sección de anexos
     datos_finales = []
     en_seccion_anexos = False
     
@@ -193,31 +212,50 @@ def procesar_formulario_pdf(archivo):
             continue
         
         if en_seccion_anexos:
-            # Buscar tracking numbers
-            patrones = [
-                r'\b(8837\d{8})\b',
-                r'\b(\d{4}\s\d{4}\s\d{4})\b',
-                r'\b(\d{12})\b',
-                r'\b(COJE[A-Z0-9]{8,})\b',
-                r'\b(\d{9,10})\b'
-            ]
-            
-            for patron in patrones:
-                matches = re.findall(patron, linea)
-                for match in matches:
-                    tracking = match.replace(" ", "") if isinstance(match, str) else match
-                    datos_finales.append({
-                        "Tracking": tracking,
-                        "Fecha_FMM": "",
-                        "Pais_Destino_FMM": pais_destino,
-                        "FMM_Formulario": fmm_formulario,
-                        "Remitente_Usuario_FMM": usuario,
-                        "Facturas_FMM": ""
-                    })
+            # Buscar tracking numbers específicamente en líneas de guías
+            if re.search(r'127\s+GUIAS DE TRAFICO POSTAL', linea) or re.search(r'127\s+GUAS DE TRAFICO POSTAL', linea):
+                patrones = [
+                    r'\b(8837\d{8})\b',
+                    r'\b(\d{4}\s\d{4}\s\d{4})\b',
+                    r'\b(\d{12})\b', 
+                    r'\b(COJE[A-Z0-9]{8,})\b',
+                    r'\b(\d{9,10})\b'
+                ]
+                
+                for patron in patrones:
+                    matches = re.findall(patron, linea)
+                    for match in matches:
+                        tracking = match.replace(" ", "") if isinstance(match, str) else match
+                        # Buscar fecha en la misma línea
+                        fecha_match = re.search(r'(\d{4}/\d{2}/\d{2})', linea)
+                        fecha = ""
+                        if fecha_match:
+                            try:
+                                fecha = datetime.strptime(fecha_match.group(1), '%Y/%m/%d').strftime('%Y-%m-%d')
+                            except:
+                                fecha = ""
+                        
+                        datos_finales.append({
+                            "Tracking": tracking,
+                            "Fecha_FMM": fecha,
+                            "Pais_Destino_FMM": pais_destino,
+                            "FMM_Formulario": fmm_formulario,
+                            "Remitente_Usuario_FMM": usuario,
+                            "Facturas_FMM": factura_a_asignar
+                        })
+                        break
     
-    return datos_finales
+    # Eliminar duplicados
+    unique_data = []
+    seen_trackings = set()
+    for item in datos_finales:
+        if item['Tracking'] not in seen_trackings:
+            unique_data.append(item)
+            seen_trackings.add(item['Tracking'])
+    
+    return unique_data
 
-# --- INTERFAZ STREAMLIT ---
+# --- INTERFAZ STREAMLIT MEJORADA ---
 def main():
     st.title("📦 Sistema de Conciliación de Guías Aéreas")
     st.markdown("---")
@@ -225,8 +263,6 @@ def main():
     # Inicializar session state
     if 'resultados' not in st.session_state:
         st.session_state.resultados = None
-    if 'archivos_procesados' not in st.session_state:
-        st.session_state.archivos_procesados = False
     
     # Sidebar para carga de archivos
     with st.sidebar:
@@ -238,88 +274,113 @@ def main():
             if archivos_guias and archivos_formularios:
                 with st.spinner("Procesando archivos..."):
                     try:
+                        # Procesar guías
                         df_guias = procesar_archivos_guias_pdf(archivos_guias)
-                        df_formularios = pd.DataFrame()
+                        st.info(f"Guías procesadas: {len(df_guias)}")
+                        
+                        # Procesar formularios
+                        todos_datos_formularios = []
                         for archivo in archivos_formularios:
                             datos = procesar_formulario_pdf(archivo)
-                            if datos:
-                                df_formularios = pd.concat([df_formularios, pd.DataFrame(datos)], ignore_index=True)
+                            todos_datos_formularios.extend(datos)
+                        
+                        df_formularios = pd.DataFrame(todos_datos_formularios)
+                        st.info(f"Formularios procesados: {len(df_formularios)}")
                         
                         if not df_guias.empty and not df_formularios.empty:
-                            df_guias['Tracking'] = df_guias['Tracking'].astype(str)
-                            df_formularios['Tracking'] = df_formularios['Tracking'].astype(str)
+                            # Conciliación con verificación real de datos
+                            df_conciliado = pd.merge(
+                                df_guias, 
+                                df_formularios, 
+                                on='Tracking', 
+                                how='outer', 
+                                indicator=True,
+                                suffixes=('_Guia', '_FMM')
+                            )
                             
-                            df_conciliado = pd.merge(df_guias, df_formularios, on='Tracking', how='outer', indicator=True)
-                            
-                            # Simplificar la conciliación para demo
+                            # Función de análisis REAL
                             def analizar_fila(row):
-                                if row['_merge'] == 'left_only': return '❌ SOLO EN GUÍA'
-                                if row['_merge'] == 'right_only': return '❌ SOLO EN FMM'
-                                return '✅ OK'
+                                if row['_merge'] == 'left_only': 
+                                    return '❌ SOLO EN GUÍA'
+                                if row['_merge'] == 'right_only': 
+                                    return '❌ SOLO EN FMM'
+                                
+                                # Verificar coincidencias reales
+                                diferencias = []
+                                if str(row.get('Fecha_Guia', '')) != str(row.get('Fecha_FMM', '')):
+                                    diferencias.append("Fecha")
+                                if str(row.get('Pais_Destino_Guia', '')) != str(row.get('Pais_Destino_FMM', '')):
+                                    diferencias.append("País")
+                                if str(row.get('FMM_Guia', '')) != str(row.get('FMM_Formulario', '')):
+                                    diferencias.append("FMM")
+                                if str(row.get('Facturas_Guia', '')) != str(row.get('Facturas_FMM', '')):
+                                    diferencias.append("Facturas")
+                                
+                                if not diferencias:
+                                    return '✅ OK'
+                                else:
+                                    return f'⚠️ Diferencias: {", ".join(diferencias)}'
                             
                             df_conciliado['Estado_Conciliacion'] = df_conciliado.apply(analizar_fila, axis=1)
                             
                             st.session_state.resultados = df_conciliado
-                            st.session_state.archivos_procesados = True
                             st.success("✅ Conciliación completada")
+                            
                         else:
-                            st.warning("No se pudieron extraer datos suficientes")
+                            st.warning("No se pudieron extraer datos suficientes para comparar")
+                            
                     except Exception as e:
-                        st.error(f"Error en procesamiento: {e}")
+                        st.error(f"Error en procesamiento: {str(e)}")
             else:
                 st.warning("⚠️ Debes cargar ambos tipos de archivos")
     
     # Botón de limpieza
     if st.sidebar.button("🗑️ Limpiar Resultados", type="secondary"):
         st.session_state.resultados = None
-        st.session_state.archivos_procesados = False
         st.rerun()
     
     # Mostrar resultados
     if st.session_state.resultados is not None:
         st.header("📊 Resultados de Conciliación")
-        st.dataframe(st.session_state.resultados, use_container_width=True)
         
-        # Estadísticas
-        st.subheader("📈 Resumen")
-        total_guias = len(st.session_state.resultados)
-        solo_guia = len(st.session_state.resultados[st.session_state.resultados['_merge'] == 'left_only'])
-        solo_fmm = len(st.session_state.resultados[st.session_state.resultados['_merge'] == 'right_only'])
-        coincidencias = len(st.session_state.resultados[st.session_state.resultados['_merge'] == 'both'])
+        # Filtrar columnas para mejor visualización
+        columnas_a_mostrar = [
+            'Tracking', 'Fecha_Guia', 'Fecha_FMM', 'Pais_Destino_Guia', 
+            'Pais_Destino_FMM', 'Peso_Neto_Guia', 'FMM_Guia', 'FMM_Formulario',
+            'Facturas_Guia', 'Facturas_FMM', 'Estado_Conciliacion'
+        ]
         
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("Total Guías", total_guias)
-        col2.metric("Solo en Guías", solo_guia)
-        col3.metric("Solo en FMM", solo_fmm)
-        col4.metric("Coincidencias", coincidencias)
+        columnas_existentes = [col for col in columnas_a_mostrar if col in st.session_state.resultados.columns]
+        df_mostrar = st.session_state.resultados[columnas_existentes]
+        
+        st.dataframe(df_mostrar, use_container_width=True)
+        
+        # Estadísticas reales
+        st.subheader("📈 Resumen de Conciliación")
+        if 'Estado_Conciliacion' in st.session_state.resultados.columns:
+            conteo_estados = st.session_state.resultados['Estado_Conciliacion'].value_counts()
+            
+            col1, col2, col3, col4 = st.columns(4)
+            col1.metric("Total", len(st.session_state.resultados))
+            col2.metric("✅ OK", conteo_estados.get('✅ OK', 0))
+            col3.metric("❌ Solo Guía", conteo_estados.get('❌ SOLO EN GUÍA', 0))
+            col4.metric("❌ Solo FMM", conteo_estados.get('❌ SOLO EN FMM', 0))
+            
+            if '⚠️ Diferencias:' in conteo_estados:
+                st.metric("⚠️ Con Diferencias", conteo_estados['⚠️ Diferencias:'])
         
         # Botones de exportación
         st.subheader("💾 Exportar Resultados")
-        col1, col2 = st.columns(2)
-        with col1:
-            csv = st.session_state.resultados.to_csv(index=False)
-            st.download_button("📥 Descargar CSV", csv, "conciliacion.csv", "text/csv")
-        
-        with col2:
-            # Para Excel necesitamos guardar temporalmente
-            if st.button("📥 Descargar Excel"):
-                with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as tmp:
-                    st.session_state.resultados.to_excel(tmp.name, index=False)
-                    with open(tmp.name, "rb") as f:
-                        st.download_button("Descargar Excel", f, "conciliacion.xlsx")
+        csv = st.session_state.resultados.to_csv(index=False)
+        st.download_button("📥 Descargar CSV", csv, "conciliacion.csv", "text/csv")
     
     # Información de uso
     with st.expander("ℹ️ Instrucciones de uso"):
         st.markdown("""
-        1. **Cargar archivos**: Sube las guías PDF y formularios PDF
-        2. **Procesar**: Haz clic en 'Procesar Conciliación'
-        3. **Revisar resultados**: Los resultados se mostrarán en tabla
-        4. **Exportar**: Descarga en CSV o Excel
-        5. **Limpiar**: Usa 'Limpiar Resultados' para empezar de nuevo
-        
-        **Formatos soportados:**
-        - Guías: FedEx, UPS, DHL
-        - Formularios: Formularios de movimiento de mercancías
+        **⚠️ IMPORTANTE:** Esta versión incluye verificaciones reales de datos:
+        - Compara fechas, países, FMM y facturas
+        - Muestra diferencias reales, no solo el merge
+        - Elimina duplicados automáticamente
         """)
 
 if __name__ == "__main__":
