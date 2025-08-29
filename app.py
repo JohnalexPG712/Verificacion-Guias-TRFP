@@ -66,8 +66,8 @@ def pdf_extraer_peso_neto(texto_guia, operador):
 
 def pdf_extraer_fmm_guia(texto_guia, operador):
     patrones = [r"FMM[:\s]*(\d+)", r"FMM\s*No\.?\s*(\d+)", r"F\.M\.M\.\s*(\d+)", r"\b(\d{6})\b(?=.*FMM)"]
-    for patron in patrones:
-        match = re.search(patron, texto_guia, re.IGNORECASE)
+    for patrones in patrones:
+        match = re.search(patrones, texto_guia, re.IGNORECASE)
         if match: return match.group(1)
     return ""
 
@@ -346,6 +346,9 @@ def main():
                             
                             df_conciliado['Estado_Conciliacion'] = df_conciliado.apply(analizar_fila, axis=1)
                             
+                            # ELIMINAR columna _merge (ya no es necesaria)
+                            df_conciliado = df_conciliado.drop(columns=['_merge'], errors='ignore')
+                            
                             # Reiniciar índice para que empiece en 1
                             df_conciliado.reset_index(drop=True, inplace=True)
                             df_conciliado.index = df_conciliado.index + 1
@@ -361,12 +364,11 @@ def main():
             else:
                 st.warning("⚠️ Debes cargar ambos tipos de archivos")
     
-    # Botón de limpieza - AHORA LIMPIA TODO
+    # Botón de limpieza - LIMPIA TODO
     if st.sidebar.button("🗑️ Limpiar Resultados", type="secondary"):
         st.session_state.resultados = None
         st.session_state.archivos_guias = None
         st.session_state.archivos_formularios = None
-        # Limpiar también los file uploaders
         st.rerun()
     
     # Mostrar resultados
@@ -410,13 +412,16 @@ def main():
             if diferencias > 0:
                 st.metric("⚠️ Con Diferencias", diferencias)
         
-        # Botones de exportación - SOLO EXCEL AHORA
+        # Botones de exportación - SOLO EXCEL
         st.subheader("💾 Exportar Resultados")
+        
+        # Usar EXACTAMENTE el mismo DataFrame que se muestra en pantalla
+        df_para_excel = df_mostrar.copy()
         
         # Crear archivo Excel en memoria
         excel_buffer = io.BytesIO()
         with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
-            st.session_state.resultados.to_excel(writer, index=False, sheet_name='Conciliación')
+            df_para_excel.to_excel(writer, index=True, sheet_name='Conciliación')
         
         excel_buffer.seek(0)
         
@@ -443,7 +448,7 @@ def main():
         - ✅ Índice comienza en 1
         - ✅ Eliminación de duplicados automática
         - ✅ Detección de diferencias específicas
-        - ✅ Descarga en formato Excel
+        - ✅ Descarga en formato Excel (sin columna _merge)
         
         **📦 Formatos soportados:**
         - Guías: FedEx, UPS, DHL
