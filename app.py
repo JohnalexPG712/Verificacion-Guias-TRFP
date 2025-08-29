@@ -5,6 +5,7 @@ import pandas as pd
 import pdfplumber
 from datetime import datetime
 import tempfile
+import io
 
 # --- CONFIGURACIÓN INICIAL ---
 st.set_page_config(page_title="Sistema de Conciliación de Guías", page_icon="📦", layout="wide")
@@ -263,24 +264,36 @@ def main():
     # Inicializar session state
     if 'resultados' not in st.session_state:
         st.session_state.resultados = None
+    if 'archivos_guias' not in st.session_state:
+        st.session_state.archivos_guias = None
+    if 'archivos_formularios' not in st.session_state:
+        st.session_state.archivos_formularios = None
     
     # Sidebar para carga de archivos
     with st.sidebar:
         st.header("📂 Cargar Archivos")
-        archivos_guias = st.file_uploader("Guías PDF (FedEx, UPS, DHL)", type="pdf", accept_multiple_files=True)
-        archivos_formularios = st.file_uploader("Formularios PDF", type="pdf", accept_multiple_files=True)
+        
+        # Usar session state para los archivos
+        archivos_guias = st.file_uploader("Guías PDF (FedEx, UPS, DHL)", type="pdf", accept_multiple_files=True, key="guias_uploader")
+        archivos_formularios = st.file_uploader("Formularios PDF", type="pdf", accept_multiple_files=True, key="formularios_uploader")
+        
+        # Guardar archivos en session state
+        if archivos_guias:
+            st.session_state.archivos_guias = archivos_guias
+        if archivos_formularios:
+            st.session_state.archivos_formularios = archivos_formularios
         
         if st.button("🔄 Procesar Conciliación", type="primary"):
-            if archivos_guias and archivos_formularios:
+            if st.session_state.archivos_guias and st.session_state.archivos_formularios:
                 with st.spinner("Procesando archivos..."):
                     try:
                         # Procesar guías
-                        df_guias = procesar_archivos_guias_pdf(archivos_guias)
+                        df_guias = procesar_archivos_guias_pdf(st.session_state.archivos_guias)
                         st.info(f"Guías procesadas: {len(df_guias)}")
                         
                         # Procesar formularios
                         todos_datos_formularios = []
-                        for archivo in archivos_formularios:
+                        for archivo in st.session_state.archivos_formularios:
                             datos = procesar_formulario_pdf(archivo)
                             todos_datos_formularios.extend(datos)
                         
@@ -348,9 +361,12 @@ def main():
             else:
                 st.warning("⚠️ Debes cargar ambos tipos de archivos")
     
-    # Botón de limpieza
+    # Botón de limpieza - AHORA LIMPIA TODO
     if st.sidebar.button("🗑️ Limpiar Resultados", type="secondary"):
         st.session_state.resultados = None
+        st.session_state.archivos_guias = None
+        st.session_state.archivos_formularios = None
+        # Limpiar también los file uploaders
         st.rerun()
     
     # Mostrar resultados
@@ -394,10 +410,22 @@ def main():
             if diferencias > 0:
                 st.metric("⚠️ Con Diferencias", diferencias)
         
-        # Botones de exportación
+        # Botones de exportación - SOLO EXCEL AHORA
         st.subheader("💾 Exportar Resultados")
-        csv = st.session_state.resultados.to_csv(index=False)
-        st.download_button("📥 Descargar CSV", csv, "conciliacion.csv", "text/csv")
+        
+        # Crear archivo Excel en memoria
+        excel_buffer = io.BytesIO()
+        with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
+            st.session_state.resultados.to_excel(writer, index=False, sheet_name='Conciliación')
+        
+        excel_buffer.seek(0)
+        
+        st.download_button(
+            label="📥 Descargar Excel",
+            data=excel_buffer,
+            file_name="conciliacion_guias.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
     
     # Información de uso
     with st.expander("ℹ️ Instrucciones de uso"):
@@ -406,7 +434,7 @@ def main():
         1. **Cargar archivos**: Sube las guías PDF y formularios PDF
         2. **Procesar**: Haz clic en 'Procesar Conciliación'
         3. **Revisar resultados**: Los resultados se mostrarán en tabla
-        4. **Exportar**: Descarga en CSV o Excel
+        4. **Exportar**: Descarga en Excel
         5. **Limpiar**: Usa 'Limpiar Resultados' para empezar de nuevo
         
         **🎯 Características:**
@@ -415,6 +443,7 @@ def main():
         - ✅ Índice comienza en 1
         - ✅ Eliminación de duplicados automática
         - ✅ Detección de diferencias específicas
+        - ✅ Descarga en formato Excel
         
         **📦 Formatos soportados:**
         - Guías: FedEx, UPS, DHL
