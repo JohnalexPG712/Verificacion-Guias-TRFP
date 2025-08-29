@@ -9,7 +9,7 @@ import shutil
 # --- CONFIGURACIÓN INICIAL ---
 st.set_page_config(page_title="Sistema de Conciliación de Guías", page_icon="📦", layout="wide")
 
-# --- FUNCIONES PRINCIPALES (Misma lógica) ---
+# --- FUNCIONES PRINCIPALES COMPLETAS ---
 def pdf_detectar_operador(texto_guia):
     texto_upper = texto_guia.upper()
     if "FEDEX" in texto_upper or "TRK" in texto_upper or "MPS#" in texto_upper: return "FedEx"
@@ -33,6 +33,25 @@ def pdf_extraer_tracking(texto_guia, operador):
     elif operador == "UPS":
         m = re.search(r"SERVICE\s+(COJE[A-Z0-9]+)", texto_guia)
         return m.group(1) if m else ""
+    return ""
+
+def pdf_extraer_pais_destino(texto_guia):
+    if "UNITED STATES OF AMERICA" in texto_guia: return "UNITED STATES OF AMERICA"
+    m_codigo = re.search(r"\(([A-Z]{2})\)", texto_guia)
+    if m_codigo: return m_codigo.group(1)
+    return ""
+
+def pdf_extraer_facturas(texto_guia, operador, ref_no_maestro_dhl):
+    facturas_inv = re.findall(r"INV[:\s]*([A-Z0-9]+)", texto_guia)
+    facturas_zffe = re.findall(r"\b(ZFFE\d+|ZFFV\d+)\b", texto_guia)
+    todas = set(facturas_inv + facturas_zffe)
+    if operador == "DHL" and ref_no_maestro_dhl:
+        todas.add(ref_no_maestro_dhl)
+    return ", ".join(sorted(list(todas))) if todas else ""
+
+def pdf_extraer_remitente(texto_guia):
+    m = re.search(r"(SOLIDEO\s*S\.?A?\.?S\.?)", texto_guia, re.IGNORECASE)
+    if m: return "SOLIDEO S.A.S."
     return ""
 
 def pdf_extraer_peso_neto(texto_guia, operador):
@@ -97,6 +116,38 @@ def procesar_archivos_guias_pdf(archivos):
                         "Remitente_Usuario_Guia": pdf_extraer_remitente(texto_normalizado),
                         "Facturas_Guia": pdf_extraer_facturas(texto_normalizado, operador, "")
                     })
+            else:
+                # Para otros operadores
+                patrones_inicio = [r"ORIGIN ID:", r"EXPRESS WORLDWIDE", r"UPS WORLDWIDE SERVICE"]
+                texto_normalizado = re.sub(r'\s+', ' ', texto_completo)
+                indices = [m.start() for m in re.finditer("|".join(patrones_inicio), texto_normalizado)]
+                bloques_guias = []
+                if not indices:
+                    bloques_guias.append(texto_normalizado)
+                else:
+                    for i in range(len(indices)):
+                        inicio = indices[i]
+                        fin = indices[i+1] if i + 1 < len(indices) else len(texto_normalizado)
+                        bloques_guias.append(texto_normalizado[inicio:fin])
+                
+                ultimo_ref_dhl = ""
+                for bloque in bloques_guias:
+                    operador_bloque = pdf_detectar_operador(bloque)
+                    if operador_bloque == "DHL":
+                        match_ref = re.search(r"#(\d{6,})", bloque)
+                        if match_ref: ultimo_ref_dhl = match_ref.group(1)
+                    tracking = pdf_extraer_tracking(bloque, operador_bloque)
+                    if tracking:
+                        datos_pdf.append({
+                            "Tracking": tracking,
+                            "Fecha_Guia": pdf_extraer_fecha_guia(bloque, operador_bloque),
+                            "Pais_Destino_Guia": pdf_extraer_pais_destino(bloque),
+                            "Peso_Neto_Guia": pdf_extraer_peso_neto(bloque, operador_bloque),
+                            "FMM_Guia": pdf_extraer_fmm_guia(bloque, operador_bloque),
+                            "Remitente_Usuario_Guia": pdf_extraer_remitente(bloque),
+                            "Facturas_Guia": pdf_extraer_facturas(bloque, operador_bloque, ultimo_ref_dhl)
+                        })
+                        
         except Exception as e:
             st.error(f"Error procesando {archivo.name}: {e}")
     return pd.DataFrame(datos_pdf)
@@ -110,8 +161,61 @@ def procesar_formulario_pdf(archivo):
         st.error(f"Error leyendo formulario {archivo.name}: {e}")
         return []
     
-    # ... (resto de la función igual que antes)
-    return datos_filtrados
+    # Extracción de datos básicos
+    fmm_formulario, usuario, pais_destino = "", "", ""
+    
+    for linea in lineas:
+        if "FORMULARIO No. No." in linea:
+            match = re.search(r'FORMULARIO No\. No\.\s*(\d+)', linea)
+            if match: fmm_formulario = match.group(1)
+    
+    for linea in lineas:
+        if "1. USUARIO:" in linea:
+            match = re.search(r'1\.\s*USUARIO:\s*(SOLIDEO\s*S\.?A?\.?S\.?)', linea, re.IGNORECASE)
+            if match: usuario = "SOLIDEO S.A.S."
+    
+    for i, linea in enumerate(lineas):
+        if "22. País Destino:" in linea:
+            texto_busqueda = linea
+            for j in range(i, min(i+3, len(lineas))):
+                texto_busqueda += " " + lineas[j]
+            match = re.search(r'22\.\s*País Destino:.*?(\d+\s+[A-Z\s]+)', texto_busqueda)
+            if match:
+                pais_destino = re.sub(r'^\d+\s*', '', match.group(1).strip()).strip()
+    
+    # Búsqueda simplificada de guías en anexos
+    datos_finales = []
+    en_seccion_anexos = False
+    
+    for linea in lineas:
+        if "DETALLE DE LOS ANEXOS" in linea:
+            en_seccion_anexos = True
+            continue
+        
+        if en_seccion_anexos:
+            # Buscar tracking numbers
+            patrones = [
+                r'\b(8837\d{8})\b',
+                r'\b(\d{4}\s\d{4}\s\d{4})\b',
+                r'\b(\d{12})\b',
+                r'\b(COJE[A-Z0-9]{8,})\b',
+                r'\b(\d{9,10})\b'
+            ]
+            
+            for patron in patrones:
+                matches = re.findall(patron, linea)
+                for match in matches:
+                    tracking = match.replace(" ", "") if isinstance(match, str) else match
+                    datos_finales.append({
+                        "Tracking": tracking,
+                        "Fecha_FMM": "",
+                        "Pais_Destino_FMM": pais_destino,
+                        "FMM_Formulario": fmm_formulario,
+                        "Remitente_Usuario_FMM": usuario,
+                        "Facturas_FMM": ""
+                    })
+    
+    return datos_finales
 
 # --- INTERFAZ STREAMLIT ---
 def main():
@@ -122,7 +226,7 @@ def main():
     if 'resultados' not in st.session_state:
         st.session_state.resultados = None
     if 'archivos_procesados' not in st.session_state:
-        st.session_state.archivos_procesados = []
+        st.session_state.archivos_procesados = False
     
     # Sidebar para carga de archivos
     with st.sidebar:
@@ -133,31 +237,42 @@ def main():
         if st.button("🔄 Procesar Conciliación", type="primary"):
             if archivos_guias and archivos_formularios:
                 with st.spinner("Procesando archivos..."):
-                    df_guias = procesar_archivos_guias_pdf(archivos_guias)
-                    df_formularios = pd.DataFrame()
-                    for archivo in archivos_formularios:
-                        datos = procesar_formulario_pdf(archivo)
-                        df_formularios = pd.concat([df_formularios, pd.DataFrame(datos)], ignore_index=True)
-                    
-                    # Lógica de conciliación
-                    if not df_guias.empty and not df_formularios.empty:
-                        df_guias['Tracking'] = df_guias['Tracking'].astype(str)
-                        df_formularios['Tracking'] = df_formularios['Tracking'].astype(str)
+                    try:
+                        df_guias = procesar_archivos_guias_pdf(archivos_guias)
+                        df_formularios = pd.DataFrame()
+                        for archivo in archivos_formularios:
+                            datos = procesar_formulario_pdf(archivo)
+                            if datos:
+                                df_formularios = pd.concat([df_formularios, pd.DataFrame(datos)], ignore_index=True)
                         
-                        df_conciliado = pd.merge(df_guias, df_formularios, on='Tracking', how='outer', indicator=True)
-                        
-                        # ... (resto de la lógica de conciliación)
-                        
-                        st.session_state.resultados = df_conciliado
-                        st.session_state.archivos_procesados = archivos_guias + archivos_formularios
-                        st.success("✅ Conciliación completada")
+                        if not df_guias.empty and not df_formularios.empty:
+                            df_guias['Tracking'] = df_guias['Tracking'].astype(str)
+                            df_formularios['Tracking'] = df_formularios['Tracking'].astype(str)
+                            
+                            df_conciliado = pd.merge(df_guias, df_formularios, on='Tracking', how='outer', indicator=True)
+                            
+                            # Simplificar la conciliación para demo
+                            def analizar_fila(row):
+                                if row['_merge'] == 'left_only': return '❌ SOLO EN GUÍA'
+                                if row['_merge'] == 'right_only': return '❌ SOLO EN FMM'
+                                return '✅ OK'
+                            
+                            df_conciliado['Estado_Conciliacion'] = df_conciliado.apply(analizar_fila, axis=1)
+                            
+                            st.session_state.resultados = df_conciliado
+                            st.session_state.archivos_procesados = True
+                            st.success("✅ Conciliación completada")
+                        else:
+                            st.warning("No se pudieron extraer datos suficientes")
+                    except Exception as e:
+                        st.error(f"Error en procesamiento: {e}")
             else:
                 st.warning("⚠️ Debes cargar ambos tipos de archivos")
     
     # Botón de limpieza
     if st.sidebar.button("🗑️ Limpiar Resultados", type="secondary"):
         st.session_state.resultados = None
-        st.session_state.archivos_procesados = []
+        st.session_state.archivos_procesados = False
         st.rerun()
     
     # Mostrar resultados
@@ -165,17 +280,33 @@ def main():
         st.header("📊 Resultados de Conciliación")
         st.dataframe(st.session_state.resultados, use_container_width=True)
         
+        # Estadísticas
+        st.subheader("📈 Resumen")
+        total_guias = len(st.session_state.resultados)
+        solo_guia = len(st.session_state.resultados[st.session_state.resultados['_merge'] == 'left_only'])
+        solo_fmm = len(st.session_state.resultados[st.session_state.resultados['_merge'] == 'right_only'])
+        coincidencias = len(st.session_state.resultados[st.session_state.resultados['_merge'] == 'both'])
+        
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("Total Guías", total_guias)
+        col2.metric("Solo en Guías", solo_guia)
+        col3.metric("Solo en FMM", solo_fmm)
+        col4.metric("Coincidencias", coincidencias)
+        
         # Botones de exportación
+        st.subheader("💾 Exportar Resultados")
         col1, col2 = st.columns(2)
         with col1:
             csv = st.session_state.resultados.to_csv(index=False)
             st.download_button("📥 Descargar CSV", csv, "conciliacion.csv", "text/csv")
+        
         with col2:
-            excel_buffer = pd.ExcelWriter("conciliacion.xlsx", engine='xlsxwriter')
-            st.session_state.resultados.to_excel(excel_buffer, index=False)
-            excel_buffer.close()
-            with open("conciliacion.xlsx", "rb") as f:
-                st.download_button("📥 Descargar Excel", f, "conciliacion.xlsx")
+            # Para Excel necesitamos guardar temporalmente
+            if st.button("📥 Descargar Excel"):
+                with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as tmp:
+                    st.session_state.resultados.to_excel(tmp.name, index=False)
+                    with open(tmp.name, "rb") as f:
+                        st.download_button("Descargar Excel", f, "conciliacion.xlsx")
     
     # Información de uso
     with st.expander("ℹ️ Instrucciones de uso"):
