@@ -264,36 +264,43 @@ def main():
     # Inicializar session state
     if 'resultados' not in st.session_state:
         st.session_state.resultados = None
-    if 'archivos_guias' not in st.session_state:
-        st.session_state.archivos_guias = None
-    if 'archivos_formularios' not in st.session_state:
-        st.session_state.archivos_formularios = None
+    if 'procesamiento_completado' not in st.session_state:
+        st.session_state.procesamiento_completado = False
+    
+    # Contador único para forzar la actualización de file uploaders
+    if 'uploader_key_counter' not in st.session_state:
+        st.session_state.uploader_key_counter = 0
     
     # Sidebar para carga de archivos
     with st.sidebar:
         st.header("📂 Cargar Archivos")
         
-        # Usar session state para los archivos
-        archivos_guias = st.file_uploader("Guías PDF (FedEx, UPS, DHL)", type="pdf", accept_multiple_files=True, key="guias_uploader")
-        archivos_formularios = st.file_uploader("Formularios PDF", type="pdf", accept_multiple_files=True, key="formularios_uploader")
+        # File uploaders con keys dinámicas
+        archivos_guias = st.file_uploader(
+            "Guías PDF (FedEx, UPS, DHL)", 
+            type="pdf", 
+            accept_multiple_files=True,
+            key=f"guias_uploader_{st.session_state.uploader_key_counter}"
+        )
         
-        # Guardar archivos en session state
-        if archivos_guias:
-            st.session_state.archivos_guias = archivos_guias
-        if archivos_formularios:
-            st.session_state.archivos_formularios = archivos_formularios
+        archivos_formularios = st.file_uploader(
+            "Formularios PDF", 
+            type="pdf", 
+            accept_multiple_files=True,
+            key=f"formularios_uploader_{st.session_state.uploader_key_counter}"
+        )
         
         if st.button("🔄 Procesar Conciliación", type="primary"):
-            if st.session_state.archivos_guias and st.session_state.archivos_formularios:
+            if archivos_guias and archivos_formularios:
                 with st.spinner("Procesando archivos..."):
                     try:
                         # Procesar guías
-                        df_guias = procesar_archivos_guias_pdf(st.session_state.archivos_guias)
+                        df_guias = procesar_archivos_guias_pdf(archivos_guias)
                         st.info(f"Guías procesadas: {len(df_guias)}")
                         
                         # Procesar formularios
                         todos_datos_formularios = []
-                        for archivo in st.session_state.archivos_formularios:
+                        for archivo in archivos_formularios:
                             datos = procesar_formulario_pdf(archivo)
                             todos_datos_formularios.extend(datos)
                         
@@ -354,6 +361,7 @@ def main():
                             df_conciliado.index = df_conciliado.index + 1
                             
                             st.session_state.resultados = df_conciliado
+                            st.session_state.procesamiento_completado = True
                             st.success("✅ Conciliación completada")
                             
                         else:
@@ -364,14 +372,23 @@ def main():
             else:
                 st.warning("⚠️ Debes cargar ambos tipos de archivos")
     
-     # Botón de limpieza
-    if st.sidebar.button("🗑️ Limpiar Resultados", type="secondary"):
+    # Botón de limpieza - SIN RECARGAR PÁGINA
+    if st.sidebar.button("🗑️ Limpiar Todo", type="secondary"):
+        # Limpiar todo el estado
         st.session_state.resultados = None
-        st.session_state.archivos_procesados = []
+        st.session_state.procesamiento_completado = False
+        
+        # Incrementar el contador para forzar nuevos file uploaders
+        st.session_state.uploader_key_counter += 1
+        
+        # Mensaje de confirmación
+        st.sidebar.success("✅ Todo ha sido limpiado. Puedes cargar nuevos archivos.")
+        
+        # Forzar actualización sin recargar toda la página
         st.rerun()
     
-    # Mostrar resultados
-    if st.session_state.resultados is not None:
+    # Mostrar resultados si existen
+    if st.session_state.get('resultados') is not None:
         st.header("📊 Resultados de Conciliación")
         
         # Filtrar columnas para mejor visualización
@@ -395,7 +412,7 @@ def main():
         
         st.dataframe(df_mostrar, use_container_width=True)
         
-        # Estadísticas reales
+        # Estadísticas
         st.subheader("📈 Resumen de Conciliación")
         if 'Estado_Conciliacion' in st.session_state.resultados.columns:
             conteo_estados = st.session_state.resultados['Estado_Conciliacion'].value_counts()
@@ -411,16 +428,13 @@ def main():
             if diferencias > 0:
                 st.metric("⚠️ Con Diferencias", diferencias)
         
-        # Botones de exportación - SOLO EXCEL
+        # Botón de exportación Excel
         st.subheader("💾 Exportar Resultados")
-        
-        # Usar EXACTAMENTE el mismo DataFrame que se muestra en pantalla
-        df_para_excel = df_mostrar.copy()
         
         # Crear archivo Excel en memoria
         excel_buffer = io.BytesIO()
         with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
-            df_para_excel.to_excel(writer, index=True, sheet_name='Conciliación')
+            df_mostrar.to_excel(writer, index=True, sheet_name='Conciliación')
         
         excel_buffer.seek(0)
         
@@ -431,6 +445,10 @@ def main():
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
     
+    # Mensaje cuando no hay resultados
+    elif st.session_state.get('procesamiento_completado', False):
+        st.info("💡 Usa el botón 'Limpiar Todo' para comenzar una nueva conciliación")
+    
     # Información de uso
     with st.expander("ℹ️ Instrucciones de uso"):
         st.markdown("""
@@ -438,16 +456,16 @@ def main():
         1. **Cargar archivos**: Sube las guías PDF y formularios PDF
         2. **Procesar**: Haz clic en 'Procesar Conciliación'
         3. **Revisar resultados**: Los resultados se mostrarán en tabla
-        4. **Exportar**: Descarga en Excel
-        5. **Limpiar**: Usa 'Limpiar Resultados' para empezar de nuevo
+        4. **Exportar**: Descarga en Excel si es necesario
+        5. **Limpiar**: Usa 'Limpiar Todo' para borrar TODO y empezar de nuevo
         
         **🎯 Características:**
+        - ✅ Limpieza instantánea sin recargar página
         - ✅ Normalización de países (US = UNITED STATES OF AMERICA)
         - ✅ Comparación real de fechas, FMM y facturas
         - ✅ Índice comienza en 1
         - ✅ Eliminación de duplicados automática
-        - ✅ Detección de diferencias específicas
-        - ✅ Descarga en formato Excel (sin columna _merge)
+        - ✅ Descarga en formato Excel
         
         **📦 Formatos soportados:**
         - Guías: FedEx, UPS, DHL
@@ -456,5 +474,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
