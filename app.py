@@ -305,7 +305,7 @@ def main():
                             todos_datos_formularios.extend(datos)
                         
                         df_formularios = pd.DataFrame(todos_datos_formularios)
-                        st.info(f"Guías en formulario procesados: {len(df_formularios)}")
+                        st.info(f"Guías procesadas en el formulario: {len(df_formularios)}")
                         
                         if not df_guias.empty and not df_formularios.empty:
                             # Conciliación con verificación real de datos
@@ -472,4 +472,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
