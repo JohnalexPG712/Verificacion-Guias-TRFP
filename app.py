@@ -186,7 +186,7 @@ def procesar_formulario_pdf(archivo):
             if match:
                 pais_destino = re.sub(r'^\d+\s*', '', match.group(1).strip()).strip()
     
-    # Extraer facturas que NO mencionen servicio en la misma línea - VERSIÓN MEJORADA
+    # Extraer facturas que NO mencionen servicio - VERSIÓN MEJORADA
     en_anexos = False
     facturas_validas = []
 
@@ -196,26 +196,41 @@ def procesar_formulario_pdf(archivo):
             continue
         
         if en_anexos and "FACTURA COMERCIAL" in linea:
-            # Buscar el número de factura primero
+            # Buscar el número de factura
             match_factura = re.search(r'\b(ZFFE\d+|ZFFV\d+)\b', linea)
             if match_factura:
                 factura = match_factura.group(0)
                 
-                # Verificar si hay "servicio" en la misma línea - búsqueda más robusta
-                tiene_servicio = re.search(r'servicio', linea, re.IGNORECASE) is not None
+                # Verificar si hay mención de servicios en esta línea O en la siguiente
+                tiene_servicio = False
                 
-                # Si no hay servicio en esta línea, verificar la siguiente línea también
+                # Buscar en la línea actual
+                if re.search(r'servicio', linea, re.IGNORECASE):
+                    tiene_servicio = True
+                
+                # Buscar en la siguiente línea (si existe)
                 if not tiene_servicio and i + 1 < len(lineas):
                     siguiente_linea = lineas[i + 1]
-                    tiene_servicio = re.search(r'servicio', siguiente_linea, re.IGNORECASE) is not None
+                    if re.search(r'servicio', siguiente_linea, re.IGNORECASE):
+                        tiene_servicio = True
                 
+                # Buscar en la línea anterior (por si acaso)
+                if not tiene_servicio and i > 0:
+                    linea_anterior = lineas[i - 1]
+                    if re.search(r'servicio', linea_anterior, re.IGNORECASE):
+                        tiene_servicio = True
+                
+                # Solo agregar si NO tiene servicio
                 if not tiene_servicio:
                     facturas_validas.append(factura)
+                    print(f"✅ Factura válida agregada: {factura} - Línea: {linea}")
+                else:
+                    print(f"❌ Factura descartada (tiene servicio): {factura} - Línea: {linea}")
 
     factura_a_asignar = ", ".join(sorted(set(facturas_validas))) if facturas_validas else ""
+    print(f"Facturas finales: {factura_a_asignar}")
     
-    # Resto del código permanece igual...
-    # Extraer guías de la sección de anexos
+    # Resto del código para extraer guías...
     datos_finales = []
     en_seccion_anexos = False
     
@@ -225,7 +240,6 @@ def procesar_formulario_pdf(archivo):
             continue
         
         if en_seccion_anexos:
-            # Buscar tracking numbers específicamente en líneas de guías
             if re.search(r'127\s+GUIAS DE TRAFICO POSTAL', linea) or re.search(r'127\s+GUAS DE TRAFICO POSTAL', linea):
                 patrones = [
                     r'\b(8837\d{8})\b',
@@ -239,7 +253,6 @@ def procesar_formulario_pdf(archivo):
                     matches = re.findall(patron, linea)
                     for match in matches:
                         tracking = match.replace(" ", "") if isinstance(match, str) else match
-                        # Buscar fecha en la misma línea
                         fecha_match = re.search(r'(\d{4}/\d{2}/\d{2})', linea)
                         fecha = ""
                         if fecha_match:
@@ -484,4 +497,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
