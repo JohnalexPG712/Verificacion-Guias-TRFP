@@ -186,24 +186,35 @@ def procesar_formulario_pdf(archivo):
             if match:
                 pais_destino = re.sub(r'^\d+\s*', '', match.group(1).strip()).strip()
     
-    # Extraer facturas que NO mencionen servicio en la misma línea
+    # Extraer facturas que NO mencionen servicio en la misma línea - VERSIÓN MEJORADA
     en_anexos = False
     facturas_validas = []
 
     for i, linea in enumerate(lineas):
         if "DETALLE DE LOS ANEXOS" in linea:
             en_anexos = True
+            continue
+        
         if en_anexos and "FACTURA COMERCIAL" in linea:
-            # Buscar "servicio" o "servicios" en la MISMA línea (case insensitive)
-            tiene_servicio = re.search(r'servicio[s]?', linea, re.IGNORECASE) is not None
-            
-            if not tiene_servicio:
-                match = re.search(r'\b(ZFFE\d+|ZFFV\d+)\b', linea)
-                if match:
-                    facturas_validas.append(match.group(0))
+            # Buscar el número de factura primero
+            match_factura = re.search(r'\b(ZFFE\d+|ZFFV\d+)\b', linea)
+            if match_factura:
+                factura = match_factura.group(0)
+                
+                # Verificar si hay "servicio" en la misma línea - búsqueda más robusta
+                tiene_servicio = re.search(r'servicio', linea, re.IGNORECASE) is not None
+                
+                # Si no hay servicio en esta línea, verificar la siguiente línea también
+                if not tiene_servicio and i + 1 < len(lineas):
+                    siguiente_linea = lineas[i + 1]
+                    tiene_servicio = re.search(r'servicio', siguiente_linea, re.IGNORECASE) is not None
+                
+                if not tiene_servicio:
+                    facturas_validas.append(factura)
 
-    factura_a_asignar = ", ".join(facturas_validas) if facturas_validas else ""
+    factura_a_asignar = ", ".join(sorted(set(facturas_validas))) if facturas_validas else ""
     
+    # Resto del código permanece igual...
     # Extraer guías de la sección de anexos
     datos_finales = []
     en_seccion_anexos = False
@@ -473,3 +484,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
