@@ -187,21 +187,24 @@ def procesar_formulario_pdf(archivo):
                 pais_destino = re.sub(r'^\d+\s*', '', match.group(1).strip()).strip()
     
     # Extraer facturas que NO mencionen servicio
-    en_anexos = False
-    facturas_validas = []
+en_anexos = False
+facturas_validas = []
+
+for linea in lineas:
+    if "DETALLE DE LOS ANEXOS" in linea:
+        en_anexos = True
     
-    for i, linea in enumerate(lineas):
-        if "DETALLE DE LOS ANEXOS" in linea:
-            en_anexos = True
-        
-        if en_anexos and "FACTURA COMERCIAL" in linea:
-            tiene_servicio = any('servicio' in lineas[j].lower() for j in range(max(0, i-2), min(len(lineas), i+3)))
-            if not tiene_servicio:
-                match = re.search(r'\b(ZFFE\d+|ZFFV\d+)\b', linea)
-                if match:
-                    facturas_validas.append(match.group(0))
-    
-    factura_a_asignar = ", ".join(facturas_validas) if facturas_validas else ""
+    if en_anexos and "FACTURA COMERCIAL" in linea:
+        # Verifica si en la misma línea aparece "servicio" o "servicios"
+        if not re.search(r'\bservicios?\b', linea, re.IGNORECASE):
+            # Extrae la factura solo si NO aparece la palabra "servicio" o "servicios"
+            match = re.search(r'\b(ZFFE\d+|ZFFV\d+)\b', linea)
+            if match:
+                facturas_validas.append(match.group(0))
+
+# Une todas las facturas válidas en un solo string
+factura_a_asignar = ", ".join(facturas_validas) if facturas_validas else ""
+
     
     # Extraer guías de la sección de anexos
     datos_finales = []
@@ -472,5 +475,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
