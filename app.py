@@ -314,54 +314,32 @@ def main():
     if 'uploader_key_counter' not in st.session_state:
         st.session_state.uploader_key_counter = 0
     
-    # Sidebar para carga de archivos con fuentes más grandes
+    # Sidebar para carga de archivos
     with st.sidebar:
-        # Título más grande
-        st.markdown("""
-        <h2 style='font-size: 24px; margin-bottom: 20px;'>📂 Cargar Archivos</h2>
-        """, unsafe_allow_html=True)
+        st.header("📂 Cargar Archivos")
         
-        # File uploaders con fuentes más grandes
-        st.markdown("""
-        <div style='font-size: 18px; font-weight: bold; margin-bottom: 10px;'>
-            Guías PDF (FedEx, UPS, DHL)
-        </div>
-        """, unsafe_allow_html=True)
-        
+        # File uploaders con keys dinámicas
         archivos_guias = st.file_uploader(
-            " ",  # Espacio en blanco para el label
+            "Guías PDF (FedEx, UPS, DHL)", 
             type="pdf", 
             accept_multiple_files=True,
-            key=f"guias_uploader_{st.session_state.uploader_key_counter}",
-            label_visibility="collapsed"  # Ocultamos el label por defecto
+            key=f"guias_uploader_{st.session_state.uploader_key_counter}"
         )
-        
-        st.markdown("""
-        <div style='font-size: 18px; font-weight: bold; margin-top: 20px; margin-bottom: 10px;'>
-            Formularios PDF
-        </div>
-        """, unsafe_allow_html=True)
         
         archivos_formularios = st.file_uploader(
-            " ",  # Espacio en blanco para el label
+            "Formularios PDF", 
             type="pdf", 
             accept_multiple_files=True,
-            key=f"formularios_uploader_{st.session_state.uploader_key_counter}",
-            label_visibility="collapsed"  # Ocultamos el label por defecto
+            key=f"formularios_uploader_{st.session_state.uploader_key_counter}"
         )
         
-        # Botón con fuente más grande
         if st.button("🔄 Procesar Conciliación", type="primary"):
             if archivos_guias and archivos_formularios:
                 with st.spinner("Procesando archivos..."):
                     try:
                         # Procesar guías
                         df_guias = procesar_archivos_guias_pdf(archivos_guias)
-                        st.markdown(f"""
-                        <div style='font-size: 16px; margin: 10px 0;'>
-                            Guías procesadas: {len(df_guias)}
-                        </div>
-                        """, unsafe_allow_html=True)
+                        st.info(f"Guías procesadas: {len(df_guias)}")
                         
                         # Procesar formularios
                         todos_datos_formularios = []
@@ -370,22 +348,64 @@ def main():
                             todos_datos_formularios.extend(datos)
                         
                         df_formularios = pd.DataFrame(todos_datos_formularios)
-                        st.markdown(f"""
-                        <div style='font-size: 16px; margin: 10px 0;'>
-                            Guías procesadas en el formulario: {len(df_formularios)}
-                        </div>
-                        """, unsafe_allow_html=True)
+                        st.info(f"Guías procesadas en el formulario: {len(df_formularios)}")
                         
                         if not df_guias.empty and not df_formularios.empty:
-                            # ... (resto del código de procesamiento igual)
+                            # Conciliación con verificación real de datos
+                            df_conciliado = pd.merge(
+                                df_guias, 
+                                df_formularios, 
+                                on='Tracking', 
+                                how='outer', 
+                                indicator=True,
+                                suffixes=('_Guia', '_FMM')
+                            )
+                            
+                            # --- MAPEO DE PAÍSES ---
+                            mapa_paises = {
+                                "US": "UNITED STATES OF AMERICA", 
+                                "ESTADOS UNIDOS": "UNITED STATES OF AMERICA", 
+                                "JP": "JAPAN"
+                            }
+                            
+                            df_conciliado['Pais_Normalizado_Guia'] = df_conciliado['Pais_Destino_Guia'].str.upper().map(mapa_paises).fillna(df_conciliado['Pais_Destino_Guia'].str.upper())
+                            df_conciliado['Pais_Normalizado_FMM'] = df_conciliado['Pais_Destino_FMM'].str.upper().map(mapa_paises).fillna(df_conciliado['Pais_Destino_FMM'].str.upper())
+                            
+                            # Función de análisis REAL con países normalizados
+                            def analizar_fila(row):
+                                if row['_merge'] == 'left_only': 
+                                    return '❌ SOLO EN GUÍA'
+                                if row['_merge'] == 'right_only': 
+                                    return '❌ SOLO EN FMM'
+                                
+                                # Verificar coincidencias reales
+                                diferencias = []
+                                if str(row.get('Fecha_Guia', '')) != str(row.get('Fecha_FMM', '')):
+                                    diferencias.append("Fecha")
+                                if str(row.get('Pais_Normalizado_Guia', '')) != str(row.get('Pais_Normalizado_FMM', '')):
+                                    diferencias.append("País")
+                                if str(row.get('FMM_Guia', '')) != str(row.get('FMM_Formulario', '')):
+                                    diferencias.append("FMM")
+                                if str(row.get('Facturas_Guia', '')) != str(row.get('Facturas_FMM', '')):
+                                    diferencias.append("Facturas")
+                                
+                                if not diferencias:
+                                    return '✅ OK'
+                                else:
+                                    return f'⚠️ Diferencias: {", ".join(diferencias)}'
+                            
+                            df_conciliado['Estado_Conciliacion'] = df_conciliado.apply(analizar_fila, axis=1)
+                            
+                            # ELIMINAR columna _merge (ya no es necesaria)
+                            df_conciliado = df_conciliado.drop(columns=['_merge'], errors='ignore')
+                            
+                            # Reiniciar índice para que empiece en 1
+                            df_conciliado.reset_index(drop=True, inplace=True)
+                            df_conciliado.index = df_conciliado.index + 1
                             
                             st.session_state.resultados = df_conciliado
                             st.session_state.procesamiento_completado = True
-                            st.markdown("""
-                            <div style='font-size: 16px; color: green; font-weight: bold; margin: 10px 0;'>
-                                ✅ Conciliación completada
-                            </div>
-                            """, unsafe_allow_html=True)
+                            st.success("✅ Conciliación completada")
                             
                         else:
                             st.warning("No se pudieron extraer datos suficientes para comparar")
@@ -395,7 +415,7 @@ def main():
             else:
                 st.warning("⚠️ Debes cargar ambos tipos de archivos")
     
-    # Botón de limpieza con estilo
+    # Botón de limpieza - SIN RECARGAR PÁGINA
     if st.sidebar.button("🗑️ Limpiar Todo", type="secondary"):
         # Limpiar todo el estado
         st.session_state.resultados = None
@@ -409,7 +429,6 @@ def main():
         
         # Forzar actualización sin recargar toda la página
         st.rerun()
-
     
     # Mostrar resultados si existen
     if st.session_state.get('resultados') is not None:
@@ -496,12 +515,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-
-
-
-
-
-
-
