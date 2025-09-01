@@ -186,9 +186,9 @@ def procesar_formulario_pdf(archivo):
             if match:
                 pais_destino = re.sub(r'^\d+\s*', '', match.group(1).strip()).strip()
     
-    # NUEVA LÓGICA SIMPLIFICADA
+    # LÓGICA MEJORADA PARA FACTURAS
     en_anexos = False
-    todas_las_facturas = []
+    facturas_con_info = []  # Almacenar (factura, tiene_comentarios)
 
     for i, linea in enumerate(lineas):
         if "DETALLE DE LOS ANEXOS" in linea:
@@ -196,19 +196,52 @@ def procesar_formulario_pdf(archivo):
             continue
         
         if en_anexos and "FACTURA COMERCIAL" in linea:
-            # Buscar todas las facturas en la línea
+            # Buscar facturas en la línea
             facturas_en_linea = re.findall(r'\b(ZFFE\d+|ZFFV\d+)\b', linea)
-            todas_las_facturas.extend(facturas_en_linea)
+            
+            for factura in facturas_en_linea:
+                # Verificar si hay comentarios después de la fecha
+                # Patrón: factura + fecha + posible texto adicional
+                patron = factura + r'.*?(\d{4}/\d{2}/\d{2})\s*(.*)'
+                match = re.search(patron, linea)
+                
+                tiene_comentarios = False
+                if match:
+                    # Si hay texto después de la fecha, tiene comentarios
+                    texto_despues_fecha = match.group(2).strip()
+                    if texto_despues_fecha:  # Si no está vacío
+                        tiene_comentarios = True
+                
+                facturas_con_info.append((factura, tiene_comentarios))
 
     # Aplicar reglas de selección
     facturas_validas = []
     
-    if len(todas_las_facturas) == 1:
-        # Si solo hay una factura, extraerla sin importar el prefijo
-        facturas_validas = todas_las_facturas
-    elif len(todas_las_facturas) > 1:
-        # Si hay múltiples facturas, extraer solo las ZFFV
-        facturas_validas = [factura for factura in todas_las_facturas if factura.startswith('ZFFV')]
+    if len(facturas_con_info) == 1:
+        # Si solo hay una factura, extraerla sin importar comentarios
+        factura, tiene_comentarios = facturas_con_info[0]
+        facturas_validas.append(factura)
+    
+    elif len(facturas_con_info) > 1:
+        # Agrupar facturas por prefijo
+        facturas_por_prefijo = {}
+        for factura, tiene_comentarios in facturas_con_info:
+            prefijo = factura[:4]  # ZFFV o ZFFE
+            if prefijo not in facturas_por_prefijo:
+                facturas_por_prefijo[prefijo] = []
+            facturas_por_prefijo[prefijo].append((factura, tiene_comentarios))
+        
+        # Para cada grupo de prefijo, seleccionar la factura sin comentarios
+        for prefijo, facturas_grupo in facturas_por_prefijo.items():
+            # Buscar facturas sin comentarios
+            facturas_sin_comentarios = [f for f, tiene_com in facturas_grupo if not tiene_com]
+            
+            if facturas_sin_comentarios:
+                # Si hay facturas sin comentarios, tomar la primera
+                facturas_validas.append(facturas_sin_comentarios[0])
+            else:
+                # Si todas tienen comentarios, tomar la primera del grupo
+                facturas_validas.append(facturas_grupo[0][0])
     
     factura_a_asignar = ", ".join(sorted(set(facturas_validas))) if facturas_validas else ""
     
@@ -478,6 +511,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
