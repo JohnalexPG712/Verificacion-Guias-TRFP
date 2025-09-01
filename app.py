@@ -188,7 +188,7 @@ def procesar_formulario_pdf(archivo):
     
     # LÓGICA MEJORADA PARA FACTURAS
     en_anexos = False
-    facturas_con_info = []  # Almacenar (factura, tiene_comentarios)
+    facturas_con_info = []  # Almacenar (factura, tiene_comentarios, prefijo)
 
     for i, linea in enumerate(lineas):
         if "DETALLE DE LOS ANEXOS" in linea:
@@ -201,47 +201,50 @@ def procesar_formulario_pdf(archivo):
             
             for factura in facturas_en_linea:
                 # Verificar si hay comentarios después de la fecha
-                # Patrón: factura + fecha + posible texto adicional
                 patron = factura + r'.*?(\d{4}/\d{2}/\d{2})\s*(.*)'
                 match = re.search(patron, linea)
                 
                 tiene_comentarios = False
                 if match:
-                    # Si hay texto después de la fecha, tiene comentarios
                     texto_despues_fecha = match.group(2).strip()
-                    if texto_despues_fecha:  # Si no está vacío
+                    if texto_despues_fecha:
                         tiene_comentarios = True
                 
-                facturas_con_info.append((factura, tiene_comentarios))
+                prefijo = factura[:4]  # ZFFV o ZFFE
+                facturas_con_info.append((factura, tiene_comentarios, prefijo))
 
     # Aplicar reglas de selección
     facturas_validas = []
     
     if len(facturas_con_info) == 1:
-        # Si solo hay una factura, extraerla sin importar comentarios
-        factura, tiene_comentarios = facturas_con_info[0]
+        # Si solo hay una factura, extraerla sin importar prefijo o comentarios
+        factura, tiene_comentarios, prefijo = facturas_con_info[0]
         facturas_validas.append(factura)
     
     elif len(facturas_con_info) > 1:
-        # Agrupar facturas por prefijo
-        facturas_por_prefijo = {}
-        for factura, tiene_comentarios in facturas_con_info:
-            prefijo = factura[:4]  # ZFFV o ZFFE
-            if prefijo not in facturas_por_prefijo:
-                facturas_por_prefijo[prefijo] = []
-            facturas_por_prefijo[prefijo].append((factura, tiene_comentarios))
+        # PRIMERO: Filtrar solo facturas ZFFV (cuando hay múltiples de diferentes prefijos)
+        facturas_zffv = [(f, com) for f, com, pref in facturas_con_info if pref == 'ZFFV']
+        facturas_zffe = [(f, com) for f, com, pref in facturas_con_info if pref == 'ZFFE']
         
-        # Para cada grupo de prefijo, seleccionar la factura sin comentarios
-        for prefijo, facturas_grupo in facturas_por_prefijo.items():
-            # Buscar facturas sin comentarios
-            facturas_sin_comentarios = [f for f, tiene_com in facturas_grupo if not tiene_com]
+        # Si hay facturas ZFFV, trabajar solo con ellas
+        if facturas_zffv:
+            # Entre las ZFFV, buscar las sin comentarios
+            facturas_sin_comentarios = [f for f, com in facturas_zffv if not com]
             
             if facturas_sin_comentarios:
-                # Si hay facturas sin comentarios, tomar la primera
+                # Tomar la primera ZFFV sin comentarios
                 facturas_validas.append(facturas_sin_comentarios[0])
             else:
-                # Si todas tienen comentarios, tomar la primera del grupo
-                facturas_validas.append(facturas_grupo[0][0])
+                # Si todas las ZFFV tienen comentarios, tomar la primera ZFFV
+                facturas_validas.append(facturas_zffv[0][0])
+        else:
+            # Si no hay ZFFV pero hay ZFFE (y hay múltiples facturas)
+            # Tomar la primera ZFFE sin comentarios, o la primera si todas tienen comentarios
+            facturas_sin_comentarios = [f for f, com in facturas_zffe if not com]
+            if facturas_sin_comentarios:
+                facturas_validas.append(facturas_sin_comentarios[0])
+            elif facturas_zffe:
+                facturas_validas.append(facturas_zffe[0][0])
     
     factura_a_asignar = ", ".join(sorted(set(facturas_validas))) if facturas_validas else ""
     
@@ -293,8 +296,8 @@ def procesar_formulario_pdf(archivo):
         if item['Tracking'] not in seen_trackings:
             unique_data.append(item)
             seen_trackings.add(item['Tracking'])
-    
     return unique_data
+    
 # --- INTERFAZ STREAMLIT ---
 def main():
     st.title("📦 Sistema de Conciliación de Guías Aéreas")
@@ -511,6 +514,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
