@@ -186,7 +186,7 @@ def procesar_formulario_pdf(archivo):
             if match:
                 pais_destino = re.sub(r'^\d+\s*', '', match.group(1).strip()).strip()
     
-    # Extraer facturas que NO mencionen servicio - VERSIÓN MEJORADA
+    # Extraer facturas que NO mencionen servicio - VERSIÓN SIMPLIFICADA
     en_anexos = False
     facturas_validas = []
 
@@ -201,34 +201,38 @@ def procesar_formulario_pdf(archivo):
             if match_factura:
                 factura = match_factura.group(0)
                 
-                # Verificar si hay mención de servicios en esta línea O en la siguiente
-                tiene_servicio = False
+                # Verificar si hay mención de servicios en esta línea
+                tiene_servicio = re.search(r'servicio', linea, re.IGNORECASE) is not None
                 
-                # Buscar en la línea actual
-                if re.search(r'servicio', linea, re.IGNORECASE):
-                    tiene_servicio = True
-                
-                # Buscar en la siguiente línea (si existe)
+                # Si no hay servicio en esta línea, verificar la siguiente línea
                 if not tiene_servicio and i + 1 < len(lineas):
                     siguiente_linea = lineas[i + 1]
-                    if re.search(r'servicio', siguiente_linea, re.IGNORECASE):
-                        tiene_servicio = True
-                
-                # Buscar en la línea anterior (por si acaso)
-                if not tiene_servicio and i > 0:
-                    linea_anterior = lineas[i - 1]
-                    if re.search(r'servicio', linea_anterior, re.IGNORECASE):
-                        tiene_servicio = True
+                    tiene_servicio = re.search(r'servicio', siguiente_linea, re.IGNORECASE) is not None
                 
                 # Solo agregar si NO tiene servicio
                 if not tiene_servicio:
                     facturas_validas.append(factura)
-                    print(f"✅ Factura válida agregada: {factura} - Línea: {linea}")
-                else:
-                    print(f"❌ Factura descartada (tiene servicio): {factura} - Línea: {linea}")
 
     factura_a_asignar = ", ".join(sorted(set(facturas_validas))) if facturas_validas else ""
-    print(f"Facturas finales: {factura_a_asignar}")
+    
+    # Si no se encontraron facturas, intentar método alternativo
+    if not facturas_validas:
+        # Buscar facturas en todo el texto que no estén cerca de "servicio"
+        texto_completo = " ".join(lineas)
+        todas_facturas = re.findall(r'\b(ZFFE\d+|ZFFV\d+)\b', texto_completo)
+        
+        # Excluir facturas que estén cerca de "servicio"
+        for factura in todas_facturas:
+            # Buscar la factura en el contexto
+            patron_contexto = r'(.{0,50}' + re.escape(factura) + r'.{0,50})'
+            match_contexto = re.search(patron_contexto, texto_completo, re.IGNORECASE)
+            
+            if match_contexto:
+                contexto = match_contexto.group(1)
+                if not re.search(r'servicio', contexto, re.IGNORECASE):
+                    facturas_validas.append(factura)
+        
+        factura_a_asignar = ", ".join(sorted(set(facturas_validas))) if facturas_validas else ""
     
     # Resto del código para extraer guías...
     datos_finales = []
@@ -497,5 +501,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
