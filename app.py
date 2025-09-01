@@ -186,54 +186,30 @@ def procesar_formulario_pdf(archivo):
             if match:
                 pais_destino = re.sub(r'^\d+\s*', '', match.group(1).strip()).strip()
     
-    # NUEVA LÓGICA: Identificar bloques individuales de cada factura
+    # NUEVA LÓGICA SIMPLIFICADA
     en_anexos = False
-    facturas_validas = []
-    i = 0
+    todas_las_facturas = []
 
-    while i < len(lineas):
-        linea = lineas[i]
-        
+    for i, linea in enumerate(lineas):
         if "DETALLE DE LOS ANEXOS" in linea:
             en_anexos = True
+            continue
         
         if en_anexos and "FACTURA COMERCIAL" in linea:
-            # Buscar el número de factura en esta línea
-            match_factura = re.search(r'\b(ZFFE\d+|ZFFV\d+)\b', linea)
-            if match_factura:
-                factura = match_factura.group(0)
-                tiene_servicio = False
-                
-                # Verificar solo en la línea actual (la de la factura)
-                if re.search(r'servicio[s]?', linea, re.IGNORECASE):
-                    tiene_servicio = True
-                
-                # Si no hay servicio en la línea actual, verificar si es una factura con descripción
-                # que comienza con "6 FACTURA COMERCIAL" y termina antes de la siguiente "6 FACTURA COMERCIAL"
-                if not tiene_servicio:
-                    j = i + 1
-                    # Revisar líneas siguientes hasta encontrar otra factura o el final
-                    while j < len(lineas) and not lineas[j].startswith('6 FACTURA COMERCIAL'):
-                        if re.search(r'servicio[s]?', lineas[j], re.IGNORECASE):
-                            tiene_servicio = True
-                            break
-                        j += 1
-                
-                # Solo agregar si NO tiene servicio en su propio bloque
-                if not tiene_servicio:
-                    facturas_validas.append(factura)
-                
-                # Avanzar al siguiente bloque de factura
-                # Buscar la próxima línea que comience con "6 FACTURA COMERCIAL"
-                next_factura_index = i + 1
-                while next_factura_index < len(lineas) and not lineas[next_factura_index].startswith('6 FACTURA COMERCIAL'):
-                    next_factura_index += 1
-                
-                if next_factura_index < len(lineas):
-                    i = next_factura_index - 1  # -1 porque el loop principal incrementa i
-        
-        i += 1
+            # Buscar todas las facturas en la línea
+            facturas_en_linea = re.findall(r'\b(ZFFE\d+|ZFFV\d+)\b', linea)
+            todas_las_facturas.extend(facturas_en_linea)
 
+    # Aplicar reglas de selección
+    facturas_validas = []
+    
+    if len(todas_las_facturas) == 1:
+        # Si solo hay una factura, extraerla sin importar el prefijo
+        facturas_validas = todas_las_facturas
+    elif len(todas_las_facturas) > 1:
+        # Si hay múltiples facturas, extraer solo las ZFFV
+        facturas_validas = [factura for factura in todas_las_facturas if factura.startswith('ZFFV')]
+    
     factura_a_asignar = ", ".join(sorted(set(facturas_validas))) if facturas_validas else ""
     
     # Resto del código para extraer guías...
@@ -286,7 +262,6 @@ def procesar_formulario_pdf(archivo):
             seen_trackings.add(item['Tracking'])
     
     return unique_data
-
 # --- INTERFAZ STREAMLIT ---
 def main():
     st.title("📦 Sistema de Conciliación de Guías Aéreas")
@@ -503,6 +478,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
