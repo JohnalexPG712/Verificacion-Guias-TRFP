@@ -186,41 +186,53 @@ def procesar_formulario_pdf(archivo):
             if match:
                 pais_destino = re.sub(r'^\d+\s*', '', match.group(1).strip()).strip()
     
-    # Extraer facturas que NO mencionen servicio - VERSIÓN ESPECÍFICA
+    # NUEVA LÓGICA: Identificar bloques individuales de cada factura
     en_anexos = False
     facturas_validas = []
+    i = 0
 
-    for i, linea in enumerate(lineas):
+    while i < len(lineas):
+        linea = lineas[i]
+        
         if "DETALLE DE LOS ANEXOS" in linea:
             en_anexos = True
-            continue
         
         if en_anexos and "FACTURA COMERCIAL" in linea:
-            # Buscar el número de factura
+            # Buscar el número de factura en esta línea
             match_factura = re.search(r'\b(ZFFE\d+|ZFFV\d+)\b', linea)
             if match_factura:
                 factura = match_factura.group(0)
                 tiene_servicio = False
                 
-                # Verificar si la línea actual menciona servicio
-                if re.search(r'servicio', linea, re.IGNORECASE):
+                # Verificar solo en la línea actual (la de la factura)
+                if re.search(r'servicio[s]?', linea, re.IGNORECASE):
                     tiene_servicio = True
                 
-                # Verificar la línea siguiente (caso ZFFE1330)
-                if not tiene_servicio and i + 1 < len(lineas):
-                    linea_siguiente = lineas[i + 1]
-                    if re.search(r'servicio', linea_siguiente, re.IGNORECASE):
-                        tiene_servicio = True
+                # Si no hay servicio en la línea actual, verificar si es una factura con descripción
+                # que comienza con "6 FACTURA COMERCIAL" y termina antes de la siguiente "6 FACTURA COMERCIAL"
+                if not tiene_servicio:
+                    j = i + 1
+                    # Revisar líneas siguientes hasta encontrar otra factura o el final
+                    while j < len(lineas) and not lineas[j].startswith('6 FACTURA COMERCIAL'):
+                        if re.search(r'servicio[s]?', lineas[j], re.IGNORECASE):
+                            tiene_servicio = True
+                            break
+                        j += 1
                 
-                # Verificar la segunda línea siguiente (por si acaso)
-                if not tiene_servicio and i + 2 < len(lineas):
-                    linea_siguiente2 = lineas[i + 2]
-                    if re.search(r'servicio', linea_siguiente2, re.IGNORECASE):
-                        tiene_servicio = True
-                
-                # Solo agregar si NO tiene servicio
+                # Solo agregar si NO tiene servicio en su propio bloque
                 if not tiene_servicio:
                     facturas_validas.append(factura)
+                
+                # Avanzar al siguiente bloque de factura
+                # Buscar la próxima línea que comience con "6 FACTURA COMERCIAL"
+                next_factura_index = i + 1
+                while next_factura_index < len(lineas) and not lineas[next_factura_index].startswith('6 FACTURA COMERCIAL'):
+                    next_factura_index += 1
+                
+                if next_factura_index < len(lineas):
+                    i = next_factura_index - 1  # -1 porque el loop principal incrementa i
+        
+        i += 1
 
     factura_a_asignar = ", ".join(sorted(set(facturas_validas))) if facturas_validas else ""
     
@@ -491,6 +503,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
